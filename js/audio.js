@@ -12,7 +12,7 @@ export class AudioEngine {
     this.ctx = null;
     this.started = false;
     this.muted = localStorage.getItem('pc-muted') === '1';
-    this.masterVolume = 0.7;
+    this.masterVolume = 0.84;
     this.bpm = 84;
     this.targetBpm = 84;
     this.step = 0;
@@ -80,15 +80,15 @@ export class AudioEngine {
     this.master.connect(ctx.destination);
 
     this.musicBus = ctx.createGain();
-    this.musicBus.gain.value = 0.3;
+    this.musicBus.gain.value = 0.42;
     this.musicBus.connect(this.compressor);
 
     this.sfxBus = ctx.createGain();
-    this.sfxBus.gain.value = 0.7;
+    this.sfxBus.gain.value = 0.82;
     this.sfxBus.connect(this.compressor);
 
     this.ambienceBus = ctx.createGain();
-    this.ambienceBus.gain.value = 0.32;
+    this.ambienceBus.gain.value = 0.38;
     this.ambienceBus.connect(this.compressor);
 
     this.reverb = ctx.createConvolver();
@@ -260,8 +260,8 @@ export class AudioEngine {
     this._paused = paused;
     if (!this.started) return;
     const now = this.ctx.currentTime;
-    this.musicBus.gain.setTargetAtTime(paused ? 0.075 : 0.3, now, 0.25);
-    this.ambienceBus.gain.setTargetAtTime(paused ? 0.10 : 0.32, now, 0.3);
+    this.musicBus.gain.setTargetAtTime(paused ? 0.10 : 0.42, now, 0.25);
+    this.ambienceBus.gain.setTargetAtTime(paused ? 0.115 : 0.38, now, 0.3);
     if (!paused && this.ctx.state === 'suspended') this.ctx.resume();
   }
 
