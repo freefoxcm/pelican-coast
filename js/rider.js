@@ -178,20 +178,20 @@ function addTube(group, points, radius, material, segments = 20, radial = 6) {
   return mesh;
 }
 
-function makeFeatherGeometry() {
+function makeFeatherGeometry(tipColor = '#10161b', tipStart = 0.58) {
   const segments = 7;
   const positions = [];
   const colors = [];
   const indices = [];
   const base = new THREE.Color('#f7efdf');
-  const tip = new THREE.Color('#10161b');
+  const tip = new THREE.Color(tipColor);
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
     const width = Math.sin(Math.pow(t, 0.72) * Math.PI) * 0.15 * (1 - t * 0.32) + 0.014;
     const x = t * 1.0;
     const y = Math.sin(t * Math.PI) * 0.04 - t * t * 0.012;
     positions.push(x, y, -width * 0.52, x, y + 0.005, width * 0.5);
-    const c = base.clone().lerp(tip, smoothstep(0.58, 0.95, t));
+    const c = base.clone().lerp(tip, smoothstep(tipStart, Math.min(0.99, tipStart + 0.28), t));
     colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
     if (i < segments) {
       const a = i * 2;
@@ -346,6 +346,7 @@ export class PelicanRider {
     this.crankAngle = Math.PI * 0.2;
     this.legs = [];
     this.wings = [];
+    this.wingHands = [];
     this.pedalPositions = [new THREE.Vector3(), new THREE.Vector3()];
     this.pelvisPositions = [new THREE.Vector3(), new THREE.Vector3()];
     this.catchTimer = 0;
@@ -381,9 +382,26 @@ export class PelicanRider {
       side: THREE.DoubleSide,
     });
     this.featherDarkMaterial = new THREE.MeshStandardMaterial({ color: '#2c3439', roughness: 0.9 });
-    this.chestMaterial = new THREE.MeshStandardMaterial({ color: '#fff4df', roughness: 0.9 });
-    this.orangeMaterial = new THREE.MeshStandardMaterial({ color: '#e9a04d', roughness: 0.48, metalness: 0.02, side: THREE.DoubleSide });
-    this.orangeDarkMaterial = new THREE.MeshStandardMaterial({ color: '#b96532', roughness: 0.54 });
+    this.headFeatherMaterial = this.featherMaterial.clone();
+    this.headFeatherMaterial.color.set('#fffdf8');
+    this.headFeatherMaterial.roughness = 0.82;
+    this.featherVertexMaterial = this.featherMaterial.clone();
+    this.featherVertexMaterial.vertexColors = true;
+    this.featherVertexMaterial.color.set('#ffffff');
+    this.orangeMaterial = new THREE.MeshPhysicalMaterial({
+      color: '#e9a04d',
+      roughness: 0.38,
+      metalness: 0.0,
+      clearcoat: 0.34,
+      clearcoatRoughness: 0.36,
+      side: THREE.DoubleSide,
+    });
+    this.orangeDarkMaterial = new THREE.MeshPhysicalMaterial({
+      color: '#b96532',
+      roughness: 0.5,
+      clearcoat: 0.16,
+      clearcoatRoughness: 0.55,
+    });
     this.pouchMaterial = new THREE.MeshPhysicalMaterial({ color: '#e99151', roughness: 0.38, metalness: 0.0, clearcoat: 0.22, clearcoatRoughness: 0.55, side: THREE.DoubleSide });
     this.helmetMaterial = new THREE.MeshPhysicalMaterial({ color: '#f1e0c1', roughness: 0.34, metalness: 0.04, clearcoat: 0.72, clearcoatRoughness: 0.22 });
     this.helmetAccent = new THREE.MeshStandardMaterial({ color: '#3c7c7a', roughness: 0.3, metalness: 0.35 });
@@ -684,8 +702,28 @@ export class PelicanRider {
     this.model.add(g);
     this.bodyGroup = g;
 
-    // Slightly slimmer body with a long, visible neck and a scarf-sized gap.
-    const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 24, 18), this.featherMaterial);
+    // One continuous body with soft vertex-coloured plumage. The old separate
+    // chest shell left a hard seam across the flank, which is gone now.
+    const bodyGeo = new THREE.SphereGeometry(0.5, 32, 22);
+    const bodyPositions = bodyGeo.attributes.position;
+    const bodyColors = new Float32Array(bodyPositions.count * 3);
+    const warmPlumage = new THREE.Color('#e8d8c4');
+    const litPlumage = new THREE.Color('#fffdf7');
+    for (let i = 0; i < bodyPositions.count; i++) {
+      const nx = bodyPositions.getX(i) / 0.5;
+      const ny = bodyPositions.getY(i) / 0.5;
+      const nz = bodyPositions.getZ(i) / 0.5;
+      const frontLight = smoothstep(0.1, 0.92, -nz * 0.82 + 0.22 - ny * 0.12);
+      _color.copy(warmPlumage).lerp(litPlumage, frontLight);
+      bodyColors[i * 3] = _color.r;
+      bodyColors[i * 3 + 1] = _color.g;
+      bodyColors[i * 3 + 2] = _color.b;
+    }
+    bodyGeo.setAttribute('color', new THREE.BufferAttribute(bodyColors, 3));
+    const bodyMat = this.featherMaterial.clone();
+    bodyMat.vertexColors = true;
+    bodyMat.color.set('#fffdf8');
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
     body.scale.set(0.9, 1.06, 0.86);
     body.position.set(0, 2.02, 0.12);
     body.rotation.x = -0.22;
@@ -694,19 +732,14 @@ export class PelicanRider {
     g.add(body);
     this.bodyMesh = body;
 
-    const chest = new THREE.Mesh(new THREE.SphereGeometry(0.41, 20, 14), this.chestMaterial);
-    chest.scale.set(0.76, 0.86, 0.61);
-    chest.position.set(0, 1.98, -0.15);
-    chest.rotation.x = -0.2;
-    chest.castShadow = true;
-    g.add(chest);
-
-    // Tail feathers.
+    // Three broad tail feathers, kept tucked so they read as one clean fan.
+    const tailGeo = makeFeatherGeometry('#17373b', 0.55);
     for (let i = -1; i <= 1; i++) {
-      const feather = new THREE.Mesh(makeFeatherGeometry(), this.featherMaterial);
-      feather.scale.set(0.4, 0.8, 1.2);
-      feather.position.set(i * 0.105, 1.85, 0.51);
-      feather.rotation.set(-0.1 + i * 0.04, 0.26 * i + Math.PI, 0.08);
+      const feather = new THREE.Mesh(tailGeo, this.featherVertexMaterial);
+      const outer = Math.abs(i);
+      feather.scale.set(0.52 + (1 - outer) * 0.04, 0.9, 1.4);
+      feather.position.set(i * 0.1, 1.96 + outer * 0.02, 0.54);
+      feather.rotation.set(-0.16 + outer * 0.03, Math.PI + i * 0.22, i * 0.14);
       feather.castShadow = true;
       g.add(feather);
     }
@@ -718,37 +751,95 @@ export class PelicanRider {
       new THREE.Vector3(0, 2.59, -0.34),
       new THREE.Vector3(0, 2.77, -0.42),
     ];
-    const neck = tubeFromCurve(neckPoints, 0.148, this.featherMaterial, 18, 10);
+    const neck = tubeFromCurve(neckPoints, 0.148, this.headFeatherMaterial, 18, 10);
     neck.castShadow = true;
     g.add(neck);
-    const neckBase = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 10), this.featherMaterial);
+    const neckBase = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 10), this.headFeatherMaterial);
     neckBase.scale.set(1.1, 0.65, 0.9);
     neckBase.position.set(0, 2.25, -0.08);
+    neckBase.castShadow = true;
     g.add(neckBase);
+
+    // A soft two-layer collar around the neck base, short enough not to turn
+    // into a spiky breastplate.
+    const ruffGeo = makeFeatherGeometry('#d3c3ad', 0.8);
+    for (let i = 0; i < 11; i++) {
+      const a = (i / 11) * TAU + 0.18;
+      const feather = new THREE.Mesh(ruffGeo, this.featherVertexMaterial);
+      feather.scale.set(0.16 + Math.cos(a * 2) * 0.012, 0.5, 0.82);
+      feather.position.set(Math.cos(a) * 0.15, 2.3 + Math.cos(a * 2) * 0.01, -0.08 + Math.sin(a) * 0.145);
+      feather.rotation.set(0, -a, -0.34);
+      feather.castShadow = true;
+      g.add(feather);
+    }
+    const ruffUpperGeo = makeFeatherGeometry('#ded0bb', 0.82);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU + 0.1;
+      const feather = new THREE.Mesh(ruffUpperGeo, this.featherVertexMaterial);
+      feather.scale.set(0.115, 0.34, 0.68);
+      feather.position.set(Math.cos(a) * 0.12, 2.37, -0.07 + Math.sin(a) * 0.115);
+      feather.rotation.set(0, -a, -0.2);
+      feather.castShadow = true;
+      g.add(feather);
+    }
 
     this.headGroup = new THREE.Group();
     this.headGroup.position.set(0, 2.8, -0.46);
     g.add(this.headGroup);
 
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.265, 22, 16), this.featherMaterial);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.265, 24, 18), this.headFeatherMaterial);
     head.scale.set(1.0, 1.05, 1.14);
     head.position.set(0, 0.08, -0.1);
     head.castShadow = true;
     this.headGroup.add(head);
     this.headMesh = head;
-    // A small crest at the nape.
-    const crest = new THREE.Mesh(makeFeatherGeometry(), this.featherMaterial);
-    crest.scale.set(0.17, 0.55, 0.42);
-    crest.position.set(0.055, 0.18, 0.12);
-    crest.rotation.set(0.75, 2.65, 0.2);
-    this.headGroup.add(crest);
+    // Layered crest feathers at the nape, tucked below the helmet.
+    const crestGeo = makeFeatherGeometry('#e2d3bc', 0.82);
+    const crestSpecs = [
+      [0.055, 0.18, 0.12, 0.17, 0.55, 0.42, 0.75, 2.65, 0.2],
+      [-0.045, 0.16, 0.13, 0.14, 0.44, 0.34, 0.78, 2.35, 0.16],
+      [0.135, 0.14, 0.1, 0.12, 0.38, 0.3, 0.82, 2.9, 0.22],
+    ];
+    for (const [x, y, z, sx, sy, sz, rx, ry, rz] of crestSpecs) {
+      const crest = new THREE.Mesh(crestGeo, this.featherVertexMaterial);
+      crest.scale.set(sx, sy, sz);
+      crest.position.set(x, y, z);
+      crest.rotation.set(rx, ry, rz);
+      crest.castShadow = true;
+      this.headGroup.add(crest);
+    }
+    const coralCrestGeo = makeFeatherGeometry('#bc5347', 0.64);
+    for (let i = 0; i < 2; i++) {
+      const plume = new THREE.Mesh(coralCrestGeo, this.featherVertexMaterial);
+      plume.scale.set(0.13 + i * 0.03, 0.5, 0.32);
+      plume.position.set(0.035 - i * 0.055, 0.18 + i * 0.02, 0.17 + i * 0.018);
+      plume.rotation.set(0.72, 2.58 + i * 0.3, 0.18 - i * 0.1);
+      plume.castShadow = true;
+      this.headGroup.add(plume);
+    }
 
-    // Cheeks.
+    // Feathered brows above the sunglasses make the face read at a distance.
+    for (const side of [-1, 1]) {
+      const brow = new THREE.Mesh(makeFeatherGeometry('#e7d8c1', 0.84), this.featherVertexMaterial);
+      brow.scale.set(0.075, 0.22, 0.1);
+      brow.position.set(side * 0.14, 0.25, -0.415);
+      brow.rotation.set(0.35, side * 0.55, side * 0.8);
+      this.headGroup.add(brow);
+    }
+
+    // Cheeks and a small feathered ear tuft on each side.
+    const cheekTuftGeo = makeFeatherGeometry('#e3d4bf', 0.84);
     for (const side of [-1, 1]) {
       const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 7), new THREE.MeshStandardMaterial({ color: '#eab49d', roughness: 0.8 }));
       cheek.scale.set(0.7, 0.38, 0.55);
       cheek.position.set(side * 0.2, 0.015, -0.26);
       this.headGroup.add(cheek);
+      const tuft = new THREE.Mesh(cheekTuftGeo, this.featherVertexMaterial);
+      tuft.scale.set(side * 0.1, 0.24, 0.16);
+      tuft.position.set(side * 0.225, 0.025, -0.2);
+      tuft.rotation.set(0.1, -0.95, -0.08);
+      tuft.castShadow = true;
+      this.headGroup.add(tuft);
     }
 
     // Beak and pouch.
@@ -759,10 +850,22 @@ export class PelicanRider {
     beakTip.scale.set(0.8, 0.8, 1.45);
     beakTip.position.set(0, -0.13, -1.2);
     this.headGroup.add(beakTip);
+    const beakHook = new THREE.Mesh(new THREE.ConeGeometry(0.029, 0.078, 6), this.orangeDarkMaterial);
+    beakHook.position.set(0, -0.174, -1.205);
+    beakHook.rotation.x = Math.PI - 0.25;
+    beakHook.castShadow = true;
+    this.headGroup.add(beakHook);
     const gape = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.82), this.orangeDarkMaterial);
     gape.position.set(0, -0.045, -0.75);
     gape.rotation.x = 0.115;
     this.headGroup.add(gape);
+    const pouchCrease = tubeFromCurve([
+      new THREE.Vector3(0, -0.255, -0.61),
+      new THREE.Vector3(0, -0.285, -0.73),
+      new THREE.Vector3(0, -0.272, -0.87),
+      new THREE.Vector3(0, -0.22, -1.0),
+    ], 0.006, this.orangeDarkMaterial, 16, 4);
+    this.headGroup.add(pouchCrease);
 
     const pouch = new THREE.Mesh(new THREE.SphereGeometry(0.25, 18, 12), this.pouchMaterial);
     pouch.scale.set(0.72, 0.58, 1.85);
@@ -852,6 +955,19 @@ export class PelicanRider {
       stripePoints.push(new THREE.Vector3(0, y + 0.006, z));
     }
     this.headGroup.add(tubeFromCurve(stripePoints, 0.014, this.helmetAccent, 20, 5));
+    for (const offset of [-0.034, 0.034]) {
+      const pinstripePoints = [];
+      for (let i = 0; i <= 12; i++) {
+        const t = i / 12;
+        const z = lerp(-0.39, 0.21, t);
+        const rx = 0.325 * 1.04;
+        const ry = 0.325 * 0.92;
+        const rz = 0.325 * 1.15;
+        const y = 0.16 + Math.sqrt(Math.max(0, 1 - (offset * offset) / (rx * rx) - Math.pow((z + 0.11) / rz, 2))) * ry + 0.004;
+        pinstripePoints.push(new THREE.Vector3(offset, y, z));
+      }
+      this.headGroup.add(tubeFromCurve(pinstripePoints, 0.0045, this.goldMaterial, 20, 4));
+    }
     const brim = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.026, 0.15), this.helmetAccent);
     brim.rotation.x = -0.2;
     brim.position.set(0, 0.235, -0.355);
@@ -870,11 +986,52 @@ export class PelicanRider {
         4
       );
       this.headGroup.add(strap);
+      const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.018, 0.016), this.goldMaterial);
+      buckle.position.set(side * 0.17, -0.205, -0.258);
+      buckle.rotation.z = side * 0.16;
+      this.headGroup.add(buckle);
     }
     const helmetBadge = new THREE.Mesh(new THREE.CircleGeometry(0.038, 16), this.goldMaterial);
     helmetBadge.position.set(0, 0.34, -0.39);
     helmetBadge.rotation.x = -0.35;
     this.headGroup.add(helmetBadge);
+
+    // A jaunty coral-tipped plume tucked into the back of the helmet.
+    const helmetPlumeGeo = makeFeatherGeometry('#c2594a', 0.56);
+    const helmetPlume = new THREE.Mesh(helmetPlumeGeo, this.featherVertexMaterial);
+    helmetPlume.scale.set(0.11, 0.42, 0.23);
+    helmetPlume.position.set(0.075, 0.28, 0.2);
+    helmetPlume.rotation.set(0.72, 2.55, 0.2);
+    helmetPlume.castShadow = true;
+    this.headGroup.add(helmetPlume);
+    const plumeBead = new THREE.Mesh(new THREE.SphereGeometry(0.016, 7, 5), this.goldMaterial);
+    plumeBead.position.set(0.075, 0.265, 0.19);
+    this.headGroup.add(plumeBead);
+
+    // A small coral flower tucked into the left side of the helmet.
+    const flower = new THREE.Group();
+    flower.position.set(-0.302, 0.282, -0.16);
+    flower.rotation.set(0.12, -Math.PI / 2, 0.22);
+    const petalGeo = new THREE.SphereGeometry(0.034, 7, 5);
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * TAU;
+      const petal = new THREE.Mesh(petalGeo, this.coralMaterial);
+      petal.scale.set(0.72, 1.2, 0.28);
+      petal.position.set(Math.cos(a) * 0.032, Math.sin(a) * 0.032, 0.002);
+      petal.rotation.z = a - Math.PI / 2;
+      flower.add(petal);
+    }
+    const flowerCenter = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), this.goldMaterial);
+    flowerCenter.position.z = 0.012;
+    flower.add(flowerCenter);
+    for (const side of [-1, 1]) {
+      const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.035, 7, 5), this.helmetAccent);
+      leaf.scale.set(0.9, 0.25, 0.16);
+      leaf.position.set(side * 0.025, -0.055, -0.002);
+      leaf.rotation.z = side * 0.8;
+      flower.add(leaf);
+    }
+    this.headGroup.add(flower);
     // Helmet rear flasher.
     const flasher = new THREE.Mesh(new THREE.SphereGeometry(0.018, 6, 4), new THREE.MeshStandardMaterial({ color: '#4f120e', emissive: '#ff3f2a', emissiveIntensity: 1.1 }));
     flasher.position.set(0, 0.22, 0.235);
@@ -911,7 +1068,7 @@ export class PelicanRider {
     // Wings, built mirrored. A broad membrane gives the wing a silhouette
     // from the side; individual primaries add the black-tipped feather fan.
     const membraneGeo = makeWingMembraneGeometry();
-    const featherGeo = makeFeatherGeometry();
+    const featherGeo = makeFeatherGeometry('#17373b', 0.55);
     const featherMats = new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.9,
@@ -928,69 +1085,176 @@ export class PelicanRider {
       sheenRoughness: 0.8,
       side: THREE.DoubleSide,
     });
+    const WING_REST = { x: 0.661, z: 1.54, rootX: -0.23, scale: 0.8, visualX: -0.9 };
+    this._wingRest = WING_REST;
     for (const side of [-1, 1]) {
       const wing = new THREE.Group();
       wing.position.set(side * 0.31, 2.3, -0.03);
       wing.scale.x = side;
+      wing.rotation.set(WING_REST.x, 0, -side * WING_REST.z);
       g.add(wing);
       const wingRoot = new THREE.Group();
+      wingRoot.rotation.x = WING_REST.rootX;
+      wingRoot.scale.setScalar(WING_REST.scale);
       wing.add(wingRoot);
+      const wingVisual = new THREE.Group();
+      wingVisual.rotation.x = WING_REST.visualX;
+      wingRoot.add(wingVisual);
 
       const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.34, 6, 10), this.featherMaterial);
       arm.rotation.z = Math.PI / 2;
       arm.position.set(0.2, 0, 0.01);
       arm.scale.set(1, 0.72, 0.82);
       arm.castShadow = true;
-      wingRoot.add(arm);
+      wingVisual.add(arm);
       const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.28, 5, 9), this.featherMaterial);
       forearm.rotation.z = Math.PI / 2;
       forearm.rotation.y = -0.26;
       forearm.position.set(0.43, -0.015, 0.04);
       forearm.scale.set(1, 0.75, 0.65);
       forearm.castShadow = true;
-      wingRoot.add(forearm);
+      wingVisual.add(forearm);
+      const wristArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.58, 4, 8), this.featherMaterial);
+      wristArm.rotation.z = Math.PI / 2;
+      wristArm.position.set(0.84, -0.005, 0.02);
+      wristArm.scale.set(1, 0.82, 0.76);
+      wristArm.castShadow = true;
+      wingVisual.add(wristArm);
 
       const membrane = new THREE.Mesh(membraneGeo, membraneMat);
       membrane.castShadow = true;
-      wingRoot.add(membrane);
+      wingVisual.add(membrane);
       const leading = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.55, 4, 7), this.featherMaterial);
       leading.rotation.z = Math.PI / 2;
       leading.position.set(0.38, 0.035, 0.04);
       leading.scale.set(1, 1, 0.9);
-      wingRoot.add(leading);
+      wingVisual.add(leading);
 
       for (let i = 0; i < 9; i++) {
         const t = i / 8;
         const feather = new THREE.Mesh(featherGeo, featherMats);
         const length = 0.58 + 0.34 * Math.sin(t * Math.PI);
         feather.scale.set(length, 0.9, 1.05 - t * 0.16);
-        feather.position.set(0.49 + t * 0.13, -0.01 - t * 0.035, 0.05 + t * 0.04);
+        feather.position.set(0.53 + t * 0.12, -0.075 - t * 0.03, 0.06 + t * 0.035);
         feather.rotation.y = -0.3 - t * 1.02;
         feather.rotation.z = -0.1 - t * 0.12;
         feather.rotation.x = (t - 0.5) * 0.08;
         feather.castShadow = true;
-        wingRoot.add(feather);
+        wingVisual.add(feather);
       }
       for (let i = 0; i < 5; i++) {
         const t = i / 4;
         const feather = new THREE.Mesh(featherGeo, featherMats);
         feather.scale.set(0.33 + t * 0.12, 0.62, 0.8);
-        feather.position.set(0.25 + t * 0.08, -0.055, 0.1 + t * 0.025);
-        feather.rotation.y = 0.4 + t * 0.48;
-        feather.rotation.z = -0.3 + t * 0.15;
+        feather.position.set(0.29 + t * 0.075, -0.1, 0.11 + t * 0.02);
+        feather.rotation.y = -0.78 - t * 0.34;
+        feather.rotation.z = -0.2 + t * 0.08;
         feather.castShadow = true;
-        wingRoot.add(feather);
+        wingVisual.add(feather);
+      }
+      const covertGeo = makeFeatherGeometry('#ccbca6', 0.8);
+      for (let i = 0; i < 5; i++) {
+        const t = i / 4;
+        const feather = new THREE.Mesh(covertGeo, this.featherVertexMaterial);
+        feather.scale.set(0.24 + t * 0.13, 0.72, 0.66);
+        feather.position.set(0.33 + t * 0.11, -0.035, 0.105 + t * 0.03);
+        feather.rotation.set(0.06, -0.62 - t * 0.28, -0.24 - t * 0.05);
+        feather.castShadow = true;
+        wingVisual.add(feather);
       }
       const shoulderTuft = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), this.featherMaterial);
       shoulderTuft.scale.set(1.3, 0.7, 0.9);
       shoulderTuft.position.set(0.06, 0.05, 0.02);
       shoulderTuft.castShadow = true;
-      wingRoot.add(shoulderTuft);
-      this.wings.push({ side, group: wing, root: wingRoot, flapPhase: side > 0 ? 0 : 1.7 });
+      wingVisual.add(shoulderTuft);
+
+      this.wings.push({ side, group: wing, root: wingRoot, visual: wingVisual, flapPhase: side > 0 ? 0 : 1.7 });
     }
+
+    this._buildWingHands();
 
     this.bodyGroup = g;
     this.scarf.anchorObject = this.bodyGroup;
+  }
+
+  _buildWingHands() {
+    const handMat = this.featherMaterial.clone();
+    handMat.color.set('#fff8e9');
+    handMat.side = THREE.DoubleSide;
+    handMat.roughness = 0.9;
+    const nailMat = new THREE.MeshStandardMaterial({
+      color: '#1a2228',
+      roughness: 0.44,
+      metalness: 0.08,
+      side: THREE.DoubleSide,
+    });
+    const fingerCurves = [
+      [
+        [0, 0.064, 0.02], [0, 0.075, -0.02], [0, 0.05, -0.062],
+        [0, 0.005, -0.078], [0, -0.034, -0.05],
+      ],
+      [
+        [0, 0.07, 0.035], [0, 0.083, -0.005], [0, 0.06, -0.052],
+        [0, 0.012, -0.072], [0, -0.025, -0.06],
+      ],
+      [
+        [0, 0.058, 0.045], [0, 0.07, 0.005], [0, 0.052, -0.035],
+        [0, 0.008, -0.056], [0, -0.02, -0.048],
+      ],
+      [
+        [0, 0.042, 0.05], [0, 0.055, 0.06], [0, 0.015, 0.077],
+        [0, -0.022, 0.055],
+      ],
+    ];
+    for (const wing of this.wings) {
+      const side = wing.side;
+      const hand = new THREE.Group();
+      hand.name = side > 0 ? 'right-wing-hand' : 'left-wing-hand';
+      hand.position.set(side * 0.34, 1.548, -0.615);
+
+      const palm = new THREE.Mesh(new THREE.SphereGeometry(0.078, 12, 9), handMat);
+      palm.scale.set(1.1, 0.64, 0.86);
+      palm.position.set(0, 0.04, 0.012);
+      palm.castShadow = true;
+      hand.add(palm);
+
+      // Four feathered fingers curl around the leather grip.
+      fingerCurves.forEach((points, index) => {
+        const offset = (index - 1.5) * 0.031;
+        const curve = new THREE.CatmullRomCurve3(
+          points.map(([x, y, z]) => new THREE.Vector3(x + offset, y, z))
+        );
+        const finger = new THREE.Mesh(
+          new THREE.TubeGeometry(curve, 8, index === 3 ? 0.0125 : 0.0145, 5, false),
+          handMat
+        );
+        finger.castShadow = true;
+        hand.add(finger);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(index === 3 ? 0.014 : 0.016, 6, 5), nailMat);
+        const last = points[points.length - 1];
+        tip.position.set(last[0] + offset, last[1], last[2]);
+        hand.add(tip);
+      });
+
+      // Two small wrist feathers bridge the wing tip and the bars.
+      const wristTuftGeo = makeFeatherGeometry('#ddcdb8', 0.82);
+      for (let i = 0; i < 2; i++) {
+        const wristFeather = new THREE.Mesh(wristTuftGeo, this.featherVertexMaterial);
+        wristFeather.scale.set(0.2 + i * 0.025, 0.34, 0.3);
+        wristFeather.position.set(side * (0.035 + i * 0.025), 0.07 - i * 0.008, 0.035 + i * 0.018);
+        wristFeather.rotation.set(0.45 + i * 0.12, Math.PI + side * (0.55 + i * 0.18), -0.22 * side);
+        wristFeather.castShadow = true;
+        hand.add(wristFeather);
+      }
+
+      this.model.add(hand);
+      this.root.updateMatrixWorld(true);
+      wing.root.attach(hand);
+      wing.hand = hand;
+      hand.userData.baseScale = hand.scale.clone();
+      hand.userData.restRootScale = this._wingRest.scale;
+      this.wingHands.push(hand);
+    }
   }
 
   _buildBasketFish() {
@@ -1208,24 +1472,37 @@ export class PelicanRider {
     this.headGroup.rotation.x = this.headLookPitch;
     this.headGroup.rotation.z = Math.sin(this.time * 1.3) * 0.014 - laneVelocity * 0.012;
 
-    // Wings rest near the bars and open into the wind for a wheelie / catch.
+    // In normal riding both wingtips hold the bars. For T the arms open from
+    // the shoulders and the flight feathers fan wide; the hands shrink into
+    // the wingtips so the gesture reads as a real release.
     const catchFlap = this.catchTimer > 0 ? Math.sin((1 - this.catchTimer / 0.64) * Math.PI) * 0.22 : 0;
+    const WING_REST = this._wingRest;
+    const idleFlutter = Math.sin(this.time * 3.1) * 0.008;
     for (const wing of this.wings) {
       const side = wing.side;
       const spreadTarget = clamp(wingOut + catchFlap, 0, 1);
-      const spread = side > 0 ? lerp(-1.14, 0.14, spreadTarget) : lerp(1.14, -0.14, spreadTarget);
-      const flap = Math.sin(this.time * (7.5 + speed * 0.2) + wing.flapPhase) * (0.025 + spreadTarget * 0.13 + wheelie * 0.1);
-      wing.group.rotation.z = damp(wing.group.rotation.z, spread + side * flap, 6, dt);
-      wing.group.rotation.y = damp(
-        wing.group.rotation.y,
-        side > 0 ? lerp(0.82, -0.08, spreadTarget) : lerp(-0.82, 0.08, spreadTarget),
-        5,
+      const restZ = -side * WING_REST.z;
+      const targetZ = lerp(restZ, side * 0.14, spreadTarget);
+      const targetX = lerp(WING_REST.x, -0.06, spreadTarget);
+      const targetY = lerp(0, -side * 0.08, spreadTarget);
+      const flap = Math.sin(this.time * (7.5 + speed * 0.2) + wing.flapPhase) * (spreadTarget * 0.14 + wheelie * 0.1);
+      wing.group.rotation.z = damp(wing.group.rotation.z, targetZ + side * flap, 6, dt);
+      wing.group.rotation.y = damp(wing.group.rotation.y, targetY, 5, dt);
+      wing.group.rotation.x = damp(wing.group.rotation.x, targetX, 4, dt);
+      wing.root.rotation.x = damp(wing.root.rotation.x, lerp(WING_REST.rootX, -0.045, spreadTarget), 5, dt);
+      wing.visual.rotation.x = damp(
+        wing.visual.rotation.x,
+        lerp(WING_REST.visualX, -0.02, spreadTarget) + idleFlutter * (1 - spreadTarget),
+        6,
         dt
       );
-      wing.group.rotation.x = damp(wing.group.rotation.x, -0.06 + Math.sin(this.time * 2.2 + side) * 0.03 + wheelie * 0.04, 4, dt);
-      wing.root.rotation.x = damp(wing.root.rotation.x, lerp(-0.23, -0.045, spreadTarget), 5, dt);
-      const scale = lerp(0.7, 1.0, spreadTarget);
-      wing.root.scale.set(scale, scale, scale);
+      const scale = lerp(WING_REST.scale, 1.0, spreadTarget);
+      wing.root.scale.setScalar(scale);
+      if (wing.hand) {
+        wing.hand.scale.copy(wing.hand.userData.baseScale).multiplyScalar(
+          (WING_REST.scale / scale) * (1 - spreadTarget * 0.58)
+        );
+      }
     }
 
     // Catch animation: a small head dip and pouch swell.
