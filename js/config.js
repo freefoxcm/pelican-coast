@@ -157,10 +157,10 @@ export const ACHIEVEMENTS = [
 ];
 
 export const QUALITY = [
-  { id: 'low', label: '省电', pixelRatio: 1.0, shadows: false, bloom: false, oceanDetail: 0, grass: 0.35, dprCap: 1.0 },
-  { id: 'medium', label: '均衡', pixelRatio: 1.15, shadows: true, bloom: false, oceanDetail: 0.65, grass: 0.65, dprCap: 1.35 },
-  { id: 'high', label: '高', pixelRatio: 1.45, shadows: true, bloom: true, oceanDetail: 1.0, grass: 1.0, dprCap: 1.7 },
-  { id: 'ultra', label: '极致', pixelRatio: 1.65, shadows: true, bloom: true, oceanDetail: 1.25, grass: 1.0, dprCap: 2.0 },
+  { id: 'low', label: '省电', pixelRatio: 1.0, shadows: false, oceanDetail: 0, grass: 0.35, dprCap: 1.0 },
+  { id: 'medium', label: '均衡', pixelRatio: 1.15, shadows: true, oceanDetail: 0.65, grass: 0.65, dprCap: 1.35 },
+  { id: 'high', label: '高', pixelRatio: 1.45, shadows: true, oceanDetail: 1.0, grass: 1.0, dprCap: 1.7 },
+  { id: 'ultra', label: '极致', pixelRatio: 1.65, shadows: true, oceanDetail: 1.25, grass: 1.0, dprCap: 2.0 },
 ];
 
 /**

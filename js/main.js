@@ -1,8 +1,4 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { CAMERAS, QUALITY, RIDE, ROAD } from './config.js';
 import { clamp, damp, seededRandom, smoothstep, TAU } from './utils.js';
 import { World } from './world.js';
@@ -37,8 +33,6 @@ class Game {
     this.fpsWindowFrames = 0;
     this.fps = 60;
     this.qualityIndex = 2;
-    this.bloomSupported = true;
-    this._bloomTested = false;
     this.qualityCooldown = 0;
     this.lowSamples = 0;
     this.highSamples = 0;
@@ -171,7 +165,6 @@ class Game {
     });
     this.input.setEnabled(false);
 
-    this._setupComposer();
     this._setupQuality();
     this._bindGlobal();
     this._onResize();
@@ -181,17 +174,6 @@ class Game {
     this.renderer.setAnimationLoop(this._animate);
     this.ui.setLoading(0.9, '正在点亮海岸线…');
     window.setTimeout(() => this.ui.hideLoading(220), 420);
-  }
-
-  _setupComposer() {
-    this.composer = new EffectComposer(this.renderer);
-    this.renderPass = new RenderPass(this.scene, this.camera);
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.65, 0.8);
-    this.outputPass = new OutputPass();
-    this.composer.addPass(this.renderPass);
-    this.composer.addPass(this.bloomPass);
-    this.composer.addPass(this.outputPass);
-    this._applyPixelRatio();
   }
 
   _setupQuality() {
@@ -214,7 +196,6 @@ class Game {
     this.renderer.shadowMap.enabled = preset.shadows;
     this.world.setQuality(index);
     this._applyPixelRatio();
-    this.composer.setSize(window.innerWidth, window.innerHeight);
     if (this.ui) this.ui.setQualityLabel(preset.label);
     if (this.debugEnabled) this._updateDebug();
     this._lastQualityLabel = preset.label;
@@ -225,10 +206,6 @@ class Game {
     const ratio = Math.min(window.devicePixelRatio || 1, preset.pixelRatio);
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
-    if (this.composer) {
-      this.composer.setPixelRatio(ratio);
-      this.composer.setSize(window.innerWidth, window.innerHeight);
-    }
     this.world?.setPixelRatio?.(ratio);
   }
 
@@ -928,53 +905,11 @@ class Game {
   }
 
   _render() {
-    if (this.qualityIndex >= 2 && this.bloomSupported) {
-      const night = this.world.night;
-      this.bloomPass.strength = 0.46 + night * 0.18;
-      this.bloomPass.radius = 0.62;
-      this.bloomPass.threshold = 0.8 - night * 0.12;
-      this.composer.render();
-      if (!this._bloomTested) this._bloomSelfTest();
-    } else {
-      this.renderer.render(this.scene, this.camera);
-    }
+    // Render directly. The previous post-processing chain looked glossy on
+    // some GPUs, but produced partial black frames on others, so the coast is
+    // deliberately rendered in a single, broadly compatible pass.
+    this.renderer.render(this.scene, this.camera);
     if (this.debugEnabled && this.frameCount % 120 === 0) this._updateDebug();
-  }
-
-  _bloomSelfTest() {
-    this._bloomTested = true;
-    try {
-      const gl = this.renderer.getContext();
-      const width = this.renderer.domElement.width;
-      const height = this.renderer.domElement.height;
-      const pixel = new Uint8Array(4);
-      const points = [
-        [0.5, 0.5], [0.25, 0.35], [0.75, 0.4], [0.35, 0.7], [0.65, 0.72],
-      ];
-      let total = 0;
-      for (const [px, py] of points) {
-        gl.readPixels(
-          Math.max(0, Math.floor(width * px)),
-          Math.max(0, Math.floor(height * py)),
-          1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel
-        );
-        total += pixel[0] + pixel[1] + pixel[2];
-      }
-      if (total <= 4) {
-        // Some software / blocklisted GPUs produce an empty bloom chain even
-        // though the scene itself renders. Fall back gracefully instead of
-        // showing a black ocean.
-        this.bloomSupported = false;
-        this.bloomPass.enabled = false;
-        console.warn('Bloom unavailable on this graphics path; using direct rendering.');
-        this.renderer.render(this.scene, this.camera);
-      }
-    } catch (err) {
-      this.bloomSupported = false;
-      this.bloomPass.enabled = false;
-      console.warn('Bloom self-test failed; using direct rendering.', err);
-      this.renderer.render(this.scene, this.camera);
-    }
   }
 
   _onResize() {
