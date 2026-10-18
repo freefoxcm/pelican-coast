@@ -72,6 +72,49 @@ function makeFeatherTexture(renderer) {
   return tex;
 }
 
+function makeArmFeatherTexture(renderer) {
+  const rand = seededRandom(91);
+  const tex = makeCanvasTexture(256, 256, (ctx, w, h) => {
+    ctx.fillStyle = '#f3e8d5';
+    ctx.fillRect(0, 0, w, h);
+    const cols = 7;
+    const rows = 6;
+    for (let row = -1; row <= rows; row++) {
+      for (let col = -1; col <= cols; col++) {
+        const cx = (col + (row % 2) * 0.5) * (w / cols);
+        const cy = row * (h / rows) + h / (rows * 2) + rand() * 5;
+        const rx = w / cols * (0.43 + rand() * 0.05);
+        const ry = h / rows * (0.62 + rand() * 0.05);
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate((rand() - 0.5) * 0.16);
+        const grad = ctx.createLinearGradient(0, -ry, 0, ry);
+        grad.addColorStop(0, 'rgba(255,250,238,.52)');
+        grad.addColorStop(0.58, 'rgba(232,219,197,.2)');
+        grad.addColorStop(0.92, 'rgba(158,139,115,.14)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, ry, 0, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(146,128,105,.17)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 1, ry * 0.68, 0.18, Math.PI - 0.18);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    for (let i = 0; i < 500; i++) {
+      ctx.fillStyle = rand() > 0.5 ? 'rgba(255,252,244,.1)' : 'rgba(114,96,78,.045)';
+      ctx.fillRect(rand() * w, rand() * h, 1 + rand() * 2, 1);
+    }
+  });
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1.15, 1);
+  tex.anisotropy = Math.min(8, renderer?.capabilities?.getMaxAnisotropy?.() || 4);
+  return tex;
+}
+
 function makeBasketTexture() {
   const tex = makeCanvasTexture(128, 128, (ctx, w, h) => {
     ctx.fillStyle = '#a9804f';
@@ -280,27 +323,54 @@ function solveIK(hip, foot, upper, lower, bendHint, outKnee) {
   return outKnee;
 }
 
-function buildBeakGeometry() {
+function beakProfile(t) {
+  t = clamp(t, 0, 1);
+  const tip = smoothstep(0.8, 1, t);
+  const w = (0.155 + Math.sin(t * Math.PI) * 0.03 - 0.11 * t * t) * (1 - tip * 0.2);
+  const h = (0.038 + Math.sin(t * Math.PI) * 0.006 - 0.014 * t) * (1 - tip * 0.42);
+  const cy = 0.078 - 0.05 * t - 0.015 * t * t - tip * 0.085;
+  const z = -0.26 - 0.96 * t - tip * 0.035;
+  return { w, h, cy, z, mouthY: cy - h + 0.004 };
+}
+
+function pouchProfile(t) {
+  const p = beakProfile(t);
+  const tipTuck = smoothstep(0.78, 0.94, t);
+  const halfWidth = p.w * 0.98 * (1 - tipTuck);
+  const sag = (0.1 + 0.16 * Math.sin(Math.PI * Math.pow(t, 0.9)) * (1 - 0.25 * t)) * (1 - tipTuck);
+  return { p, tipTuck, halfWidth, sag };
+}
+
+function buildUpperBeakGeometry() {
+  const segments = 22;
+  const ring = 10;
   const positions = [];
+  const colors = [];
   const indices = [];
-  const segments = 15;
-  const ring = 6;
-  for (let i = 0; i < segments; i++) {
-    const t = i / (segments - 1);
-    const z = -0.27 - 0.96 * t;
-    let y = 0.09 - 0.20 * Math.pow(t, 1.35);
-    if (t > 0.9) y -= Math.pow((t - 0.9) / 0.1, 2) * 0.055;
-    const width = 0.105 + Math.sin(t * Math.PI) * 0.025 - t * 0.035;
-    const height = 0.043 * (1 - t * 0.35);
+  const baseColor = new THREE.Color('#d96a24');
+  const midColor = new THREE.Color('#ef9330');
+  const tipColor = new THREE.Color('#ffc95f');
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const p = beakProfile(t);
     for (let j = 0; j < ring; j++) {
       const a = (j / ring) * TAU;
+      const top = Math.max(0, Math.sin(a));
       positions.push(
-        Math.cos(a) * width,
-        y + Math.sin(a) * height,
-        z
+        Math.cos(a) * p.w,
+        p.cy + Math.sin(a) * p.h + top * 0.005 * (1 - t * 0.5),
+        p.z
       );
+      const c = baseColor.clone()
+        .lerp(midColor, smoothstep(0, 0.45, t))
+        .lerp(tipColor, smoothstep(0.55, 0.98, t));
+      c.offsetHSL(0, -0.01, top * 0.035);
+      if (Math.sin(a) < -0.55) {
+        c.lerp(new THREE.Color('#b45b27'), (-Math.sin(a) - 0.55) * 0.18);
+      }
+      colors.push(c.r, c.g, c.b);
     }
-    if (i < segments - 1) {
+    if (i < segments) {
       for (let j = 0; j < ring; j++) {
         const a = i * ring + j;
         const b = (i + 1) * ring + j;
@@ -310,14 +380,203 @@ function buildBeakGeometry() {
       }
     }
   }
+  const last = segments * ring;
+  const pTip = beakProfile(1);
   const tipIndex = positions.length / 3;
-  positions.push(0, -0.03, -1.29);
-  const last = (segments - 1) * ring;
+  positions.push(0, pTip.cy - pTip.h * 0.4, pTip.z - 0.018);
+  colors.push(tipColor.r, tipColor.g, tipColor.b);
   for (let j = 0; j < ring; j++) {
     indices.push(last + j, tipIndex, last + ((j + 1) % ring));
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function buildBeakPouchGeometry() {
+  const segments = 22;
+  const ring = 12;
+  const positions = [];
+  const colors = [];
+  const indices = [];
+  const baseColor = new THREE.Color('#de782e');
+  const midColor = new THREE.Color('#f09a42');
+  const tipColor = new THREE.Color('#ffc873');
+  for (let i = 0; i <= segments; i++) {
+    const t = (i / segments) * 0.94;
+    const { p, halfWidth, sag } = pouchProfile(t);
+    for (let j = 0; j <= ring; j++) {
+      const phi = (j / ring) * Math.PI;
+      const x = Math.cos(phi) * halfWidth;
+      const y = p.mouthY + 0.006 - Math.sin(phi) * sag;
+      const z = p.z + 0.26;
+      positions.push(x, y, z);
+      const c = baseColor.clone()
+        .lerp(midColor, smoothstep(0.04, 0.48, t))
+        .lerp(tipColor, smoothstep(0.56, 0.94, t));
+      c.offsetHSL(0, 0.025, Math.sin(phi) * 0.02 - (1 - Math.sin(phi)) * 0.025);
+      colors.push(c.r, c.g, c.b);
+    }
+    if (i < segments) {
+      for (let j = 0; j < ring; j++) {
+        const a = i * (ring + 1) + j;
+        const b = (i + 1) * (ring + 1) + j;
+        indices.push(a, b, a + 1, a + 1, b, b + 1);
+      }
+    }
+  }
+  // Close the top of the sac. Without this roof the camera can see straight
+  // into the pouch from the front, which reads as a permanent open mouth.
+  const topStart = positions.length / 3;
+  const topSegments = 4;
+  const roofColor = new THREE.Color('#e88d3d');
+  for (let i = 0; i <= segments; i++) {
+    const t = (i / segments) * 0.94;
+    const { p, halfWidth } = pouchProfile(t);
+    const topY = p.mouthY + 0.006;
+    const z = p.z + 0.26;
+    for (let k = 0; k <= topSegments; k++) {
+      const f = k / topSegments;
+      const x = halfWidth * (1 - f * 2);
+      const y = topY + Math.sin(Math.PI * f) * 0.012;
+      positions.push(x, y, z);
+      const c = roofColor.clone().lerp(tipColor, smoothstep(0.5, 0.94, t) * 0.5);
+      colors.push(c.r, c.g, c.b);
+    }
+    if (i < segments) {
+      for (let k = 0; k < topSegments; k++) {
+        const a = topStart + i * (topSegments + 1) + k;
+        const b = topStart + (i + 1) * (topSegments + 1) + k;
+        indices.push(a, b, a + 1, a + 1, b, b + 1);
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function unifiedBeakProfile(t) {
+  const tip = smoothstep(0.82, 1, t);
+  const w = (0.155 + Math.sin(t * Math.PI) * 0.03 - 0.11 * t * t) * (1 - tip * 0.93);
+  const h = (0.04 + Math.sin(t * Math.PI) * 0.006 - 0.016 * t) * (1 - tip * 0.85);
+  const d = (0.09 + 0.21 * Math.sin(Math.PI * Math.pow(t, 0.85)) * (1 - 0.15 * t)) * (1 - tip * 0.95);
+  const mouthY = 0.045 - 0.05 * t - 0.02 * t * t - tip * 0.06;
+  const z = -0.96 * t - tip * 0.03;
+  return { w, h, d, mouthY, z, tip };
+}
+
+function buildUnifiedBeakGeometry() {
+  const segments = 26;
+  const ring = 18;
+  const positions = [];
+  const colors = [];
+  const indices = [];
+  const upperBase = new THREE.Color('#d5601d');
+  const upperTip = new THREE.Color('#ffc65b');
+  const pouchBase = new THREE.Color('#dd7a2f');
+  const pouchTip = new THREE.Color('#ffbe66');
+  const seamColor = new THREE.Color('#93421d');
+  for (let i = 0; i <= segments; i++) {
+    const t = (i / segments) * 0.96;
+    const p = unifiedBeakProfile(t);
+    for (let j = 0; j < ring; j++) {
+      const a = (j / ring) * TAU;
+      const s = Math.sin(a);
+      const c = Math.cos(a);
+      const x = c * p.w;
+      let y = p.mouthY + (s >= 0 ? p.h * s : p.d * s);
+      if (s > 0) y += s * s * 0.004;
+      positions.push(x, y, p.z);
+      let color;
+      if (s >= 0) {
+        color = upperBase.clone().lerp(upperTip, smoothstep(0.08, 1, t));
+        color.offsetHSL(0, 0.01, s * 0.028);
+      } else {
+        color = pouchBase.clone().lerp(pouchTip, smoothstep(0.05, 0.96, t));
+        color.offsetHSL(0, 0.025, -s * 0.012);
+      }
+      const seam = 1 - smoothstep(0, 0.1, Math.abs(s));
+      color.lerp(seamColor, seam * 0.55);
+      colors.push(color.r, color.g, color.b);
+    }
+    if (i < segments) {
+      for (let j = 0; j < ring; j++) {
+        const a = i * ring + j;
+        const b = (i + 1) * ring + j;
+        const c = i * ring + ((j + 1) % ring);
+        const d = (i + 1) * ring + ((j + 1) % ring);
+        indices.push(a, b, c, c, b, d);
+      }
+    }
+  }
+  const tipP = unifiedBeakProfile(0.985);
+  const tipIndex = positions.length / 3;
+  positions.push(0, tipP.mouthY, tipP.z);
+  colors.push(upperTip.r, upperTip.g, upperTip.b);
+  const last = segments * ring;
+  for (let j = 0; j < ring; j++) {
+    indices.push(last + j, tipIndex, last + ((j + 1) % ring));
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function makeWingArmGeometry() {
+  const segments = 20;
+  const radial = 10;
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = (i / segments) * 0.985;
+    const arch = Math.sin(Math.PI * t);
+    const x = -0.075 + t * 1.267;
+    const cy = arch * 0.008;
+    const cz = arch * 0.034;
+    const ry = 0.045 * (1 - t * 0.55) + 0.008;
+    const rz = 0.098 * (1 - t * 0.58) + 0.014;
+    for (let j = 0; j < radial; j++) {
+      const a = (j / radial) * TAU;
+      positions.push(x, cy + Math.cos(a) * ry, cz + Math.sin(a) * rz);
+      uvs.push(t * 1.6, j / radial);
+    }
+    if (i < segments) {
+      for (let j = 0; j < radial; j++) {
+        const a = i * radial + j;
+        const b = (i + 1) * radial + j;
+        const c = i * radial + ((j + 1) % radial);
+        const d = (i + 1) * radial + ((j + 1) % radial);
+        indices.push(a, b, c, c, b, d);
+      }
+    }
+  }
+  const tipIndex = positions.length / 3;
+  positions.push(1.19, 0, 0);
+  uvs.push(1, 0.5);
+  const last = segments * radial;
+  for (let j = 0; j < radial; j++) {
+    indices.push(last + j, tipIndex, last + ((j + 1) % radial));
+  }
+  const baseIndex = positions.length / 3;
+  positions.push(-0.08, 0, 0);
+  uvs.push(0, 0.5);
+  for (let j = 0; j < radial; j++) {
+    indices.push(baseIndex, j, (j + 1) % radial);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   return geo;
@@ -388,6 +647,10 @@ export class PelicanRider {
     this.featherVertexMaterial = this.featherMaterial.clone();
     this.featherVertexMaterial.vertexColors = true;
     this.featherVertexMaterial.color.set('#ffffff');
+    this.armFeatherMaterial = this.headFeatherMaterial.clone();
+    this.armFeatherMaterial.map = makeArmFeatherTexture(renderer);
+    this.armFeatherMaterial.color.set('#f6ecd9');
+    this.armFeatherMaterial.roughness = 0.86;
     this.orangeMaterial = new THREE.MeshPhysicalMaterial({
       color: '#e9a04d',
       roughness: 0.38,
@@ -402,12 +665,43 @@ export class PelicanRider {
       clearcoat: 0.16,
       clearcoatRoughness: 0.55,
     });
+    this.beakSurfaceMaterial = new THREE.MeshPhysicalMaterial({
+      vertexColors: true,
+      color: '#ffffff',
+      roughness: 0.33,
+      metalness: 0.0,
+      clearcoat: 0.4,
+      clearcoatRoughness: 0.32,
+      emissive: new THREE.Color('#3b1404'),
+      emissiveIntensity: 0.1,
+      side: THREE.DoubleSide,
+    });
+    this.pouchSurfaceMaterial = new THREE.MeshPhysicalMaterial({
+      vertexColors: true,
+      color: '#ffffff',
+      roughness: 0.48,
+      metalness: 0.0,
+      clearcoat: 0.28,
+      clearcoatRoughness: 0.45,
+      sheen: 0.35,
+      sheenColor: new THREE.Color('#ffc98e'),
+      sheenRoughness: 0.8,
+      emissive: new THREE.Color('#4a1b07'),
+      emissiveIntensity: 0.14,
+      side: THREE.DoubleSide,
+    });
     this.pouchMaterial = new THREE.MeshPhysicalMaterial({ color: '#e99151', roughness: 0.38, metalness: 0.0, clearcoat: 0.22, clearcoatRoughness: 0.55, side: THREE.DoubleSide });
     this.helmetMaterial = new THREE.MeshPhysicalMaterial({ color: '#f1e0c1', roughness: 0.34, metalness: 0.04, clearcoat: 0.72, clearcoatRoughness: 0.22 });
     this.helmetAccent = new THREE.MeshStandardMaterial({ color: '#3c7c7a', roughness: 0.3, metalness: 0.35 });
     this.lensMaterial = new THREE.MeshPhysicalMaterial({ color: '#07141a', roughness: 0.07, metalness: 0.65, clearcoat: 1.0, clearcoatRoughness: 0.05 });
     this.goldMaterial = new THREE.MeshStandardMaterial({ color: '#d9b271', roughness: 0.23, metalness: 0.9 });
     this.legMaterial = new THREE.MeshStandardMaterial({ color: '#e89b45', roughness: 0.62 });
+
+    // A soft warm bounce below the face lifts the gular pouch and the
+    // underside of the bill out of pure silhouette.
+    this.characterFill = new THREE.PointLight('#ffd7ae', 0.2, 1.55, 2);
+    this.characterFill.position.set(0, 2.3, -0.72);
+    this.model.add(this.characterFill);
 
     this.bikeRoot = new THREE.Group();
     this.model.add(this.bikeRoot);
@@ -842,43 +1136,40 @@ export class PelicanRider {
       this.headGroup.add(tuft);
     }
 
-    // Beak and pouch.
-    const beak = new THREE.Mesh(buildBeakGeometry(), this.orangeMaterial);
-    beak.castShadow = true;
-    this.headGroup.add(beak);
-    const beakTip = new THREE.Mesh(new THREE.SphereGeometry(0.058, 9, 7), this.orangeDarkMaterial);
-    beakTip.scale.set(0.8, 0.8, 1.45);
-    beakTip.position.set(0, -0.13, -1.2);
-    this.headGroup.add(beakTip);
-    const beakHook = new THREE.Mesh(new THREE.ConeGeometry(0.029, 0.078, 6), this.orangeDarkMaterial);
-    beakHook.position.set(0, -0.174, -1.205);
-    beakHook.rotation.x = Math.PI - 0.25;
-    beakHook.castShadow = true;
-    this.headGroup.add(beakHook);
-    const gape = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.82), this.orangeDarkMaterial);
-    gape.position.set(0, -0.045, -0.75);
-    gape.rotation.x = 0.115;
-    this.headGroup.add(gape);
-    const pouchCrease = tubeFromCurve([
-      new THREE.Vector3(0, -0.255, -0.61),
-      new THREE.Vector3(0, -0.285, -0.73),
-      new THREE.Vector3(0, -0.272, -0.87),
-      new THREE.Vector3(0, -0.22, -1.0),
-    ], 0.006, this.orangeDarkMaterial, 16, 4);
-    this.headGroup.add(pouchCrease);
+    // One closed, asymmetric bill volume: flat upper mandible and sagging
+    // pouch share a real surface, so there is no open cavity to read as a
+    // permanent "shocked mouth" from low camera angles.
+    const billGroup = new THREE.Group();
+    billGroup.position.set(0, 0, -0.26);
+    const bill = new THREE.Mesh(buildUnifiedBeakGeometry(), this.beakSurfaceMaterial);
+    bill.castShadow = true;
+    billGroup.add(bill);
+    this.headGroup.add(billGroup);
+    this.pouch = billGroup;
 
-    const pouch = new THREE.Mesh(new THREE.SphereGeometry(0.25, 18, 12), this.pouchMaterial);
-    pouch.scale.set(0.72, 0.58, 1.85);
-    pouch.position.set(0, -0.14, -0.72);
-    pouch.rotation.x = -0.06;
-    pouch.castShadow = true;
-    this.headGroup.add(pouch);
-    this.pouch = pouch;
+    // A soft throat sac under the bill root, so the closed bill still has the
+    // characteristic heavy pelican jawline.
+    const throat = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 12), this.pouchMaterial);
+    throat.scale.set(0.86, 0.78, 1.24);
+    throat.position.set(0, -0.085, -0.52);
+    throat.castShadow = true;
+    this.headGroup.add(throat);
 
-    // A tiny fish silhouette pin on the scarf? The scarf knot gets a gold pin.
+    const cere = new THREE.Mesh(new THREE.SphereGeometry(0.115, 14, 10), this.orangeMaterial);
+    cere.scale.set(1.0, 0.58, 0.78);
+    cere.position.set(0, 0.018, -0.286);
+    cere.castShadow = true;
+    this.headGroup.add(cere);
+
+    const nostrilProfile = unifiedBeakProfile(0.2);
+    const nostrilX = 0.055;
+    const nostrilY = nostrilProfile.mouthY
+      + nostrilProfile.h * Math.sqrt(Math.max(0, 1 - Math.pow(nostrilX / nostrilProfile.w, 2)))
+      + 0.003;
     for (const side of [-1, 1]) {
-      const nostril = new THREE.Mesh(new THREE.SphereGeometry(0.011, 5, 4), this.orangeDarkMaterial);
-      nostril.position.set(side * 0.035, 0.135, -0.35);
+      const nostril = new THREE.Mesh(new THREE.SphereGeometry(0.014, 7, 5), this.orangeDarkMaterial);
+      nostril.scale.set(1.5, 0.3, 0.65);
+      nostril.position.set(side * nostrilX, nostrilY, nostrilProfile.z - 0.26);
       this.headGroup.add(nostril);
     }
 
@@ -978,19 +1269,19 @@ export class PelicanRider {
       vent.position.set(side * 0.12, 0.43, -0.02);
       vent.rotation.z = side * 0.2;
       this.headGroup.add(vent);
-      const strap = cylinderBetween(
-        new THREE.Vector3(side * 0.25, 0.17, -0.14),
-        new THREE.Vector3(side * 0.17, -0.21, -0.26),
-        0.008,
-        this.helmetAccent,
-        4
-      );
-      this.headGroup.add(strap);
-      const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.018, 0.016), this.goldMaterial);
-      buckle.position.set(side * 0.17, -0.205, -0.258);
-      buckle.rotation.z = side * 0.16;
-      this.headGroup.add(buckle);
     }
+    this.headGroup.add(tubeFromCurve([
+      new THREE.Vector3(-0.245, 0.17, -0.14),
+      new THREE.Vector3(-0.22, 0.035, -0.18),
+      new THREE.Vector3(-0.14, -0.11, -0.2),
+      new THREE.Vector3(0, -0.175, -0.2),
+      new THREE.Vector3(0.14, -0.11, -0.2),
+      new THREE.Vector3(0.22, 0.035, -0.18),
+      new THREE.Vector3(0.245, 0.17, -0.14),
+    ], 0.008, this.helmetAccent, 30, 4));
+    const chinBuckle = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.022, 0.016), this.goldMaterial);
+    chinBuckle.position.set(0, -0.177, -0.205);
+    this.headGroup.add(chinBuckle);
     const helmetBadge = new THREE.Mesh(new THREE.CircleGeometry(0.038, 16), this.goldMaterial);
     helmetBadge.position.set(0, 0.34, -0.39);
     helmetBadge.rotation.x = -0.35;
@@ -1101,34 +1392,46 @@ export class PelicanRider {
       wingVisual.rotation.x = WING_REST.visualX;
       wingRoot.add(wingVisual);
 
-      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.34, 6, 10), this.featherMaterial);
-      arm.rotation.z = Math.PI / 2;
-      arm.position.set(0.2, 0, 0.01);
-      arm.scale.set(1, 0.72, 0.82);
-      arm.castShadow = true;
-      wingVisual.add(arm);
-      const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.28, 5, 9), this.featherMaterial);
-      forearm.rotation.z = Math.PI / 2;
-      forearm.rotation.y = -0.26;
-      forearm.position.set(0.43, -0.015, 0.04);
-      forearm.scale.set(1, 0.75, 0.65);
-      forearm.castShadow = true;
-      wingVisual.add(forearm);
-      const wristArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.044, 0.58, 4, 8), this.featherMaterial);
-      wristArm.rotation.z = Math.PI / 2;
-      wristArm.position.set(0.84, -0.005, 0.02);
-      wristArm.scale.set(1, 0.82, 0.76);
-      wristArm.castShadow = true;
-      wingVisual.add(wristArm);
+      // One continuous, gently tapered feathered arm instead of three
+      // sausage-like capsules with visible elbow balls.
+      const wingArm = new THREE.Mesh(makeWingArmGeometry(), this.armFeatherMaterial);
+      wingArm.castShadow = true;
+      wingVisual.add(wingArm);
+      const shoulderGeo = makeFeatherGeometry('#e0cfb9', 0.82);
+      const shoulderSpecs = [
+        [0.045, 0.045, 0.015, -0.42, 0.12],
+        [0.05, -0.025, 0.02, -0.12, -0.04],
+        [0.055, 0.01, 0.07, -0.78, 0.06],
+      ];
+      for (const [x, y, z, ry, rz] of shoulderSpecs) {
+        const feather = new THREE.Mesh(shoulderGeo, this.featherVertexMaterial);
+        feather.scale.set(0.31, 0.95, 0.95);
+        feather.position.set(x, y, z);
+        feather.rotation.set(0.03, ry, rz);
+        feather.castShadow = true;
+        wingVisual.add(feather);
+      }
+      const outerCovertGeo = makeFeatherGeometry('#e4d3bd', 0.82);
+      for (let i = 0; i < 6; i++) {
+        const t = i / 5;
+        const feather = new THREE.Mesh(outerCovertGeo, this.featherVertexMaterial);
+        feather.scale.set(0.24 + Math.sin(t * Math.PI) * 0.045, 0.8, 0.76);
+        feather.position.set(0.1 + t * 0.68, -(0.088 - t * 0.043), 0.015 + t * 0.012);
+        feather.rotation.set(0.08, -0.18 - t * 0.12, -0.08 + t * 0.16);
+        feather.castShadow = true;
+        wingVisual.add(feather);
+      }
+      const topCovertGeo = makeFeatherGeometry('#e7d7c1', 0.84);
+      for (let i = 0; i < 4; i++) {
 
-      const membrane = new THREE.Mesh(membraneGeo, membraneMat);
-      membrane.castShadow = true;
-      wingVisual.add(membrane);
-      const leading = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.55, 4, 7), this.featherMaterial);
-      leading.rotation.z = Math.PI / 2;
-      leading.position.set(0.38, 0.035, 0.04);
-      leading.scale.set(1, 1, 0.9);
-      wingVisual.add(leading);
+        const t = i / 3;
+        const feather = new THREE.Mesh(topCovertGeo, this.featherVertexMaterial);
+        feather.scale.set(0.21 + t * 0.025, 0.72, 0.66);
+        feather.position.set(0.18 + t * 0.5, 0.045 - t * 0.02, -0.005 + t * 0.02);
+        feather.rotation.set(0.02, -0.22 - t * 0.2, 0.08 + t * 0.12);
+        feather.castShadow = true;
+        wingVisual.add(feather);
+      }
 
       for (let i = 0; i < 9; i++) {
         const t = i / 8;
@@ -1162,12 +1465,6 @@ export class PelicanRider {
         feather.castShadow = true;
         wingVisual.add(feather);
       }
-      const shoulderTuft = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), this.featherMaterial);
-      shoulderTuft.scale.set(1.3, 0.7, 0.9);
-      shoulderTuft.position.set(0.06, 0.05, 0.02);
-      shoulderTuft.castShadow = true;
-      wingVisual.add(shoulderTuft);
-
       this.wings.push({ side, group: wing, root: wingRoot, visual: wingVisual, flapPhase: side > 0 ? 0 : 1.7 });
     }
 
@@ -1509,7 +1806,11 @@ export class PelicanRider {
     this.catchPulse = Math.max(0, this.catchPulse - dt * 2.4);
     this.pouchBulge = damp(this.pouchBulge, 0, 1.4, dt);
     const catchSquash = this.catchTimer > 0 ? Math.sin((1 - this.catchTimer / 0.64) * Math.PI) : 0;
-    this.pouch.scale.set(0.72 + this.pouchBulge * 0.09, 0.58 + this.pouchBulge * 0.16 - catchSquash * 0.03, 1.85 + this.pouchBulge * 0.13);
+    this.pouch.scale.set(
+      1 + this.pouchBulge * 0.12,
+      1 + this.pouchBulge * 0.18 - catchSquash * 0.03,
+      1
+    );
     this.headGroup.position.y = 2.8 + Math.sin(this.crankAngle * 2 + 0.5) * 0.009 - catchSquash * 0.035;
 
     // Pouch and head shake when a fish is caught.
